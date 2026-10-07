@@ -723,13 +723,6 @@ function boot(state) {
   var STRIKE_COLUMNS = ["dataAplicacao", "dataExpiracao", "oficial", "status", "observacao", "pontos", "responsavel"];
   var CURSO_COLUMNS = ["dataAplicacao", "oficial", "badge", "curso", "unidade"];
 
-  var FREE_BADGE_DEFS = [
-    { label: "SAHP", range: [100, 199], sourceKeys: ["sahp"] },
-    { label: "LSPD", range: [200, 299], sourceKeys: ["lspd"] },
-    { label: "LSSD", range: [700, 799], sourceKeys: ["lscs", "lssd"] },
-    { label: "ACADEMY", range: [600, 699], sourceKeys: ["academy"] }
-  ];
-
   var INSIGNIA_KEYS = ["FTO","HSPU","MARY","SWAT","T2A","T2S","ASD","CID","IA"];
 
   var saveTimer = null;
@@ -827,13 +820,21 @@ function boot(state) {
     var host = document.getElementById("view-roster");
     var html = '<div class="toolbar"><input type="text" id="rosterSearch" placeholder="Buscar por nome, badge ou posto...">' +
       '<input type="text" id="newDeptName" placeholder="Nome do novo departamento..." style="max-width:260px">' +
-      '<button class="btn" id="addDeptBtn">+ Novo departamento</button></div>';
+      '<input type="number" id="newDeptRangeStart" placeholder="Badge de" style="width:100px">' +
+      '<input type="number" id="newDeptRangeEnd" placeholder="Badge at\u00e9" style="width:100px">' +
+      '<button class="btn" id="addDeptBtn">+ Novo departamento</button></div>' +
+      '<div class="err" id="newDeptErr" style="color:var(--red);font-size:12px;margin:-4px 0 8px;"></div>';
     state.roster.forEach(function (dept, di) {
       var ranks = RANK_OPTIONS[dept.key] || [];
       html += '<div class="dept-card"><div class="dept-card-head">' +
         '<input class="cell-input dept-title-input" data-d="' + di + '" value="' + esc(dept.title) + '" style="font-family:var(--font-head);font-size:18px;font-weight:700;max-width:360px;">' +
         '<div style="display:flex;align-items:center;gap:10px;">' +
-        (dept.badgeRange ? '<span class="dept-badge-range">Badges ' + dept.badgeRange[0] + '\u2013' + dept.badgeRange[1] + '</span>' : '') +
+        '<span class="dept-badge-range-wrap" style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-dim);">Badges ' +
+          '<input class="cell-input dept-range-start" data-d="' + di + '" type="number" value="' + (dept.badgeRange ? dept.badgeRange[0] : '') + '" placeholder="de" style="width:64px;background:var(--panel);border-color:var(--line);padding:4px 6px;">' +
+          '\u2013' +
+          '<input class="cell-input dept-range-end" data-d="' + di + '" type="number" value="' + (dept.badgeRange ? dept.badgeRange[1] : '') + '" placeholder="at\u00e9" style="width:64px;background:var(--panel);border-color:var(--line);padding:4px 6px;">' +
+        '</span>' +
+        '<span class="dept-range-err" data-d="' + di + '" style="color:var(--red);font-size:11px;"></span>' +
         '<button class="btn btn-small" data-add-emp="' + di + '">+ Funcion\u00e1rio</button>' +
         '<button class="btn btn-danger btn-small" data-del-dept="' + di + '">Remover depto.</button>' +
         '</div></div>' +
@@ -893,6 +894,35 @@ function boot(state) {
         var d = parseInt(el.getAttribute('data-d'), 10);
         state.roster[d].title = el.value;
         scheduleSave();
+      });
+    });
+    function commitDeptRange(d) {
+      var startEl = host.querySelector('.dept-range-start[data-d="' + d + '"]');
+      var endEl = host.querySelector('.dept-range-end[data-d="' + d + '"]');
+      var errEl = host.querySelector('.dept-range-err[data-d="' + d + '"]');
+      var start = parseInt(startEl.value, 10), end = parseInt(endEl.value, 10);
+      if (errEl) errEl.textContent = '';
+      if (isNaN(start) || isNaN(end) || start > end) {
+        state.roster[d].badgeRange = (startEl.value === '' && endEl.value === '') ? null : state.roster[d].badgeRange;
+        if (!(startEl.value === '' && endEl.value === '') && errEl) errEl.textContent = 'Faixa inv\u00e1lida.';
+        renderBadges();
+        return;
+      }
+      var overlap = state.roster.find(function (dp, i) {
+        return i !== d && dp.badgeRange && !(end < dp.badgeRange[0] || start > dp.badgeRange[1]);
+      });
+      if (overlap) {
+        if (errEl) errEl.textContent = 'Sobrep\u00f5e "' + overlap.title + '" (' + overlap.badgeRange[0] + '\u2013' + overlap.badgeRange[1] + ').';
+        renderBadges();
+        return;
+      }
+      state.roster[d].badgeRange = [start, end];
+      renderBadges();
+      scheduleSave();
+    }
+    host.querySelectorAll('.dept-range-start, .dept-range-end').forEach(function (el) {
+      el.addEventListener('blur', function () {
+        commitDeptRange(parseInt(el.getAttribute('data-d'), 10));
       });
     });
     host.querySelectorAll('.insignia-chip').forEach(function (chip) {
@@ -961,10 +991,21 @@ function boot(state) {
     });
     document.getElementById('addDeptBtn').addEventListener('click', function () {
       var nameInput = document.getElementById('newDeptName');
+      var startInput = document.getElementById('newDeptRangeStart');
+      var endInput = document.getElementById('newDeptRangeEnd');
+      var errEl = document.getElementById('newDeptErr');
       var name = nameInput.value.trim();
-      if (!name) { nameInput.focus(); return; }
-      state.roster.push({ key: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title: name, badgeRange: null, rows: [] });
+      var start = parseInt(startInput.value, 10), end = parseInt(endInput.value, 10);
+      errEl.textContent = '';
+      if (!name) { errEl.textContent = 'Informe o nome do departamento.'; nameInput.focus(); return; }
+      if (isNaN(start) || isNaN(end) || start > end) { errEl.textContent = 'Informe uma faixa de badges v\u00e1lida (de / at\u00e9).'; startInput.focus(); return; }
+      var overlap = state.roster.find(function (dp) {
+        return dp.badgeRange && !(end < dp.badgeRange[0] || start > dp.badgeRange[1]);
+      });
+      if (overlap) { errEl.textContent = 'Essa faixa se sobrep\u00f5e \u00e0 de "' + overlap.title + '" (' + overlap.badgeRange[0] + '\u2013' + overlap.badgeRange[1] + ').'; return; }
+      state.roster.push({ key: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), title: name, badgeRange: [start, end], rows: [] });
       renderRoster();
+      renderBadges();
       scheduleSave();
     });
     var search = document.getElementById('rosterSearch');
@@ -979,10 +1020,27 @@ function boot(state) {
   function renderBadges() {
     var host = document.getElementById('view-badges');
     var map = badgeMap();
-    var html = '<div class="badge-note">As faixas abaixo refletem a aba "Badges Livres" da planilha original. Badges do quadro "LOS SANTOS COUNTY SHERIFF" e "LOS SANTOS SHERIFF DEPARTMENT" usam numera\u00e7\u00e3o 3xx, fora da faixa 700\u2013799 reservada para LSSD nessa aba \u2014 vale revisar essa diverg\u00eancia na planilha de origem.</div>';
+    var withRange = state.roster.filter(function (d) { return d.badgeRange; });
+    var withoutRange = state.roster.filter(function (d) { return !d.badgeRange; });
+    var overlaps = [];
+    withRange.forEach(function (d1, i1) {
+      withRange.forEach(function (d2, i2) {
+        if (i2 <= i1) return;
+        if (!(d1.badgeRange[1] < d2.badgeRange[0] || d1.badgeRange[0] > d2.badgeRange[1])) {
+          overlaps.push(d1.title + ' \u00d7 ' + d2.title);
+        }
+      });
+    });
+    var html = '<div class="badge-note">As faixas abaixo s\u00e3o as mesmas definidas no Quadro de Funcion\u00e1rios (cabe\u00e7alho de cada departamento). Editar a faixa de um departamento l\u00e1 atualiza esta aba automaticamente.</div>';
+    if (overlaps.length) {
+      html += '<div class="badge-note" style="border-color:var(--red);color:var(--red);">\u26a0 Faixas sobrepostas: ' + esc(overlaps.join(', ')) + '</div>';
+    }
+    if (withoutRange.length) {
+      html += '<div class="badge-note">Departamentos sem faixa definida ainda: ' + esc(withoutRange.map(function (d) { return d.title; }).join(', ')) + '.</div>';
+    }
     html += '<div class="badge-grid-wrap">';
-    FREE_BADGE_DEFS.forEach(function (def) {
-      var start = def.range[0], end = def.range[1];
+    withRange.forEach(function (dept) {
+      var start = dept.badgeRange[0], end = dept.badgeRange[1];
       var freeCount = 0, total = end - start + 1;
       var items = '';
       for (var n = start; n <= end; n++) {
@@ -997,7 +1055,7 @@ function boot(state) {
           items += '<div class="badge-item free"><span class="num">' + n + '</span><span class="status">Livre</span><span class="occ"></span></div>';
         }
       }
-      html += '<div class="badge-col"><div class="badge-col-head"><b>' + esc(def.label) + '</b>' +
+      html += '<div class="badge-col"><div class="badge-col-head"><b>' + esc(dept.title) + '</b>' +
         '<span>' + freeCount + ' livres / ' + total + '</span></div>' +
         '<div class="badge-list">' + items + '</div></div>';
     });
